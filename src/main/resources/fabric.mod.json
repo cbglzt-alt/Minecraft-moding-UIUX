@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "frameledger",
+  "version": "${version}",
+  "name": "FrameLedger",
+  "description": "Measures where your frame budget actually goes, and culls what the renderer wastes time on.",
+  "authors": [
+    "lyc"
+  ],
+  "license": "Apache-2.0",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.lyc.frameledger.FrameLedgerClient"
+    ]
+  },
+  "mixins": [
+    "frameledger.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21",
+    "java": ">=21",
+    "sodium": ">=0.6.0"
+  }
+}
