@@ -1,8 +1,10 @@
 package dev.lyc.frameledger;
 
+import dev.lyc.frameledger.measure.SweepController;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import org.lwjgl.glfw.GLFW;
@@ -22,6 +24,7 @@ public final class FrameLedgerClient implements ClientModInitializer {
 
     private static KeyBinding toggleLedger;
     private static KeyBinding toggleExpanded;
+    private static KeyBinding startSweep;
 
     @Override
     public void onInitializeClient() {
@@ -37,6 +40,12 @@ public final class FrameLedgerClient implements ClientModInitializer {
                 GLFW.GLFW_KEY_F9,
                 "category.frameledger"));
 
+        startSweep = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.frameledger.sweep",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_F10,
+                "category.frameledger"));
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (toggleLedger.wasPressed()) {
                 LedgerState.toggle();
@@ -44,8 +53,22 @@ public final class FrameLedgerClient implements ClientModInitializer {
             while (toggleExpanded.wasPressed()) {
                 LedgerState.toggleExpanded();
             }
+            while (startSweep.wasPressed()) {
+                if (!SweepController.startNext()) {
+                    LedgerState.report(SweepController.isRunning()
+                            ? "A measurement is already running"
+                            : "Nothing left to measure");
+                }
+            }
+
+            // Sampling is frame-based, so it has to be driven per tick rather than per key press.
+            SweepController.tick();
         });
 
-        LOGGER.info("FrameLedger ready — F8 toggles the ledger, F9 expands it");
+        // Safety net: a sweep must never leave the player's options modified after they leave.
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) ->
+                SweepController.resetForWorldExit());
+
+        LOGGER.info("FrameLedger ready — F8 ledger, F9 expand, F10 measure options");
     }
 }

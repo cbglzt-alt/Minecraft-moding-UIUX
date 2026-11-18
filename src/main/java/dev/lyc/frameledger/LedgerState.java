@@ -30,7 +30,8 @@ public final class LedgerState {
         report(expanded ? "Ledger expanded" : "Ledger collapsed");
     }
 
-    private static void report(String message) {
+    /** Shows a status line in the action bar. */
+    public static void report(String message) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (client != null && client.inGameHud != null) {
             client.inGameHud.setOverlayMessage(

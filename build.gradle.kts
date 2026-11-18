@@ -21,10 +21,6 @@ dependencies {
     mappings("net.fabricmc:yarn:${property("yarn_mappings")}:v2")
     modImplementation("net.fabricmc:fabric-loader:${property("loader_version")}")
     modImplementation("net.fabricmc.fabric-api:fabric-api:${property("fabric_api_version")}")
-
-    // Sodium is a runtime/compile-time dependency only; we never bundle it.
-    modCompileOnly("maven.modrinth:sodium:${property("sodium_version")}")
-    modRuntimeOnly("maven.modrinth:sodium:${property("sodium_version")}")
 }
 
 java {
@@ -51,5 +47,18 @@ tasks.processResources {
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
     options.release.set(21)
+}
+
+// Optional diagnostics: run with -PmixinDebug to dump post-mixin bytecode to run/.mixin.out,
+// which is how injection success is verified rather than assumed.
+loom {
+    runs {
+        named("client") {
+            if (project.hasProperty("mixinDebug")) {
+                property("mixin.debug.export", "true")
+                property("mixin.debug.export.decompile", "false")
+            }
+        }
+    }
 }
 

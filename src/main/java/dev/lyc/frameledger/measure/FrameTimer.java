@@ -57,6 +57,13 @@ public final class FrameTimer {
     private final boolean[] sampled = new boolean[PASS_COUNT];
     private final boolean[] openedThisFrame = new boolean[PASS_COUNT];
 
+    /**
+     * Raw, unsmoothed value of the most recent frame. Needed by A/B sweeps: the EMA deliberately
+     * blends neighbouring frames, which would smear one experimental block into the next and
+     * destroy the very difference the sweep is trying to isolate.
+     */
+    private final long[] lastNanos = new long[PASS_COUNT];
+
     /** CPU-mode start timestamps for the current frame. */
     private final long[] cpuStartNanos = new long[PASS_COUNT];
     private final long[] cpuEndNanos = new long[PASS_COUNT];
@@ -284,6 +291,7 @@ public final class FrameTimer {
         if (deltaNanos <= 0) {
             return;
         }
+        this.lastNanos[index] = deltaNanos;
         this.smoothedNanos[index] = this.sampled[index]
                 ? (long) (this.smoothedNanos[index] * (1.0 - ALPHA) + deltaNanos * ALPHA)
                 : deltaNanos;
@@ -292,6 +300,15 @@ public final class FrameTimer {
 
     public double millis(Pass pass) {
         return this.smoothedNanos[pass.ordinal()] / 1_000_000.0;
+    }
+
+    /**
+     * Raw (unsmoothed) duration of the most recent frame for this pass, in milliseconds.
+     * Returns a negative value when the pass produced no valid span that frame.
+     */
+    public double lastFrameMillis(Pass pass) {
+        long nanos = this.lastNanos[pass.ordinal()];
+        return nanos == 0L ? -1.0 : nanos / 1_000_000.0;
     }
 
     public boolean hasSample(Pass pass) {

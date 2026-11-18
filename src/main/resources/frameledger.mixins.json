@@ -8,7 +8,8 @@
     "EntityRenderDispatcherMixin",
     "BlockEntityRenderDispatcherMixin",
     "ParticleManagerMixin",
-    "InGameHudMixin"
+    "InGameHudMixin",
+    "GameMenuScreenMixin"
   ],
   "injectors": {
     "defaultRequire": 1

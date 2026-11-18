@@ -2,6 +2,7 @@ package dev.lyc.frameledger.mixin;
 
 import dev.lyc.frameledger.LedgerState;
 import dev.lyc.frameledger.gui.LedgerHud;
+import dev.lyc.frameledger.gui.SweepHud;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.hud.InGameHud;
 import net.minecraft.client.render.RenderTickCounter;
@@ -20,6 +21,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(InGameHud.class)
 public abstract class InGameHudMixin {
 
+    /** Rough height the ledger block occupies, so the sweep panel can sit below it. */
+    private static final int LEDGER_BLOCK_HEIGHT = 96;
+
     @Inject(
             method = "render(Lnet/minecraft/client/gui/DrawContext;Lnet/minecraft/client/render/RenderTickCounter;)V",
             at = @At("TAIL")
@@ -30,5 +34,6 @@ public abstract class InGameHudMixin {
             return;
         }
         LedgerHud.render(context, LedgerState.isExpanded());
+        SweepHud.render(context, 4 + LEDGER_BLOCK_HEIGHT);
     }
 }
