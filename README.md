@@ -78,8 +78,24 @@ Alternatively set `org.gradle.java.home` in `gradle.properties` to a JDK 21 path
 2. Enter a world. The ledger appears top-left once the first queries resolve (a few frames).
 3. `F8` hide/show · `F9` collapse/expand.
 
-If the row never appears, the GPU or driver did not expose timer queries
-(`GL_ARB_timer_query` / GL 3.3); the mod stays silent rather than showing fake zeros.
+### Requires a GL 3.3 context
+
+**A real context version of 3.3+ is required.** This cost real debugging time, so it is worth
+stating plainly:
+
+Minecraft frequently runs a **GL 3.2 core** context on NVIDIA drivers. The driver still reports
+`GL_ARB_timer_query=true`, the `glQueryCounter` pointer resolves, and even a single probe call
+succeeds — yet every counter issued during real rendering fails. FrameLedger therefore does **not**
+trust the extension flag; it reads the context version back and requires 3.3.
+
+On a 3.2 context the ledger stays silent and logs one line:
+
+```
+GL probe: supported=false ctxVersion=3.2 ... arbTimerQuery=true
+GPU timer queries need a GL 3.3 context; ledger disabled for this session
+```
+
+That is deliberate: showing nothing beats showing fake zeros, and it must never spam GL errors.
 
 ## Status
 

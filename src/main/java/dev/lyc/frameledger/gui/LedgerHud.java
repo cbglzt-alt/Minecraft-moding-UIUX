@@ -1,6 +1,6 @@
 package dev.lyc.frameledger.gui;
 
-import dev.lyc.frameledger.measure.GpuFrameTimer;
+import dev.lyc.frameledger.measure.FrameTimer;
 import dev.lyc.frameledger.measure.Pass;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.font.TextRenderer;
@@ -36,8 +36,8 @@ public final class LedgerHud {
     }
 
     public static void render(DrawContext context, boolean expanded) {
-        GpuFrameTimer timer = GpuFrameTimer.get();
-        if (!timer.isSupported()) {
+        FrameTimer timer = FrameTimer.get();
+        if (!timer.isActive()) {
             return;
         }
 
@@ -65,7 +65,8 @@ public final class LedgerHud {
         MinecraftClient client = MinecraftClient.getInstance();
         TextRenderer textRenderer = client.textRenderer;
 
-        String title = String.format("GPU frame  %.1f ms", attributed);
+        String unit = timer.source() == FrameTimer.Source.GPU ? "GPU" : "CPU";
+        String title = String.format("%s frame  %.1f ms", unit, attributed);
         context.drawTextWithShadow(textRenderer, title, MARGIN + 4, MARGIN + 4, COLOR_TITLE);
 
         int rowY = MARGIN + 15;
@@ -81,7 +82,7 @@ public final class LedgerHud {
     }
 
     private static void drawRow(DrawContext context, TextRenderer textRenderer,
-                                GpuFrameTimer timer, Pass pass,
+                                FrameTimer timer, Pass pass,
                                 double heaviest, double attributed, int y) {
         double ms = timer.millis(pass);
         int x = MARGIN + 4;
