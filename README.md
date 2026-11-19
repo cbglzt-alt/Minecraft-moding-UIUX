@@ -101,7 +101,6 @@ while entities also reported their own time, and the rows overlapped. Passes are
 **summed segments**, which is what "how much time did this pass take" actually means.
 
 ### A limitation this found: the CPU split is not trustworthy
-
 On a GL 3.2 context the mod falls back to CPU submit timing. Six samples from a live session:
 
 | sample | Terrain | Sky | total |
@@ -121,6 +120,30 @@ The mod therefore tracks per-pass variability and, on the CPU backend, prints
 `split unstable, total is reliable` and colours those bars differently rather than presenting a
 breakdown that would not reproduce. Per-option A/B sweeps are unaffected: they compare the same
 pass against itself, alternating, so a moving baseline cancels.
+
+### Why the GPU path does not work here, in detail
+
+Minecraft requests a **GL 3.2** context (`GLFW_CONTEXT_VERSION_MAJOR=3`, `MINOR=2` in
+`Window`'s constructor), even though the driver on this machine supports 4.6. That request is the
+reason `GL_TIMESTAMP` is unavailable: it is core only from 3.3.
+
+Two repairs were attempted and both were measured, not assumed:
+
+1. **ARB extension entry points.** `GL_ARB_timer_query` is advertised, so `ARBTimerQuery` was
+   tried. Its startup validation — eight counters plus a readback — **passed**, and the backend
+   switched to GPU. Every counter issued during real rendering then failed with
+   `GL_INVALID_OPERATION: Query object not found`, 8222 times in one session, while the ledger
+   displayed `0.00 ms`.
+2. This is why a startup probe is not trusted any more. The GPU path now runs on probation: if it
+   produces no sample within 90 frames it shuts itself down for the session and the CPU backend
+   takes over. Error count after the fix: 90, exactly the probation window, then clean.
+
+3. **Requesting a 3.3+ context** would be the remaining option. It is deliberately not done: it
+   changes the GL version for the entire game, including every other rendering mod loaded
+   alongside, to gain a measurement feature. That is a bad risk trade for a diagnostics tool.
+
+The consequence is stated plainly rather than hidden: on this class of machine the total is
+meaningful and the per-pass split is not.
 
 ## Build
 

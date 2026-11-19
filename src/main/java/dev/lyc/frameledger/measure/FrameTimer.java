@@ -1,6 +1,7 @@
 package dev.lyc.frameledger.measure;
 
 import dev.lyc.frameledger.FrameLedgerClient;
+import org.lwjgl.opengl.ARBTimerQuery;
 import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL15C;
 import org.lwjgl.opengl.GL30C;
@@ -127,13 +128,30 @@ public final class FrameTimer {
         this.logCapabilities();
     }
 
+    /**
+     * Which set of entry points the GPU path uses.
+     *
+     * <p>{@code GL_TIMESTAMP} is core in GL 3.3 but also exposed as {@code ARB_timer_query}. On a
+     * 3.2 context the core symbol belongs to a version the context does not provide, so calls
+     * through {@code GL33C} are invalid even though the pointer exists. The ARB entry point is the
+     * correct one there.</p>
+     */
+    private enum GpuApi {
+        CORE_33,
+        ARB_TIMER_QUERY,
+        NONE
+    }
+
+    private GpuApi gpuApi = GpuApi.NONE;
+
     private boolean tryInitGpu() {
-        if (!this.hasGl33Context()) {
+        this.gpuApi = this.selectGpuApi();
+        if (this.gpuApi == GpuApi.NONE) {
             return false;
         }
 
         for (int slot = 0; slot < RING; slot++) {
-            GL33C.glGenQueries(this.queries[slot]);
+            GL15C.glGenQueries(this.queries[slot]);
             for (int query : this.queries[slot]) {
                 if (query == 0) {
                     // glGenQueries yields 0 when the context cannot create queries.
@@ -142,41 +160,88 @@ public final class FrameTimer {
             }
         }
 
-        // Belt-and-braces: a context that claims 3.3 but rejects QUERY_COUNTER would otherwise
-        // fail deep inside frame rendering.
-        int probe = this.queries[0][0];
+        return this.validateCounterPath();
+    }
+
+    /**
+     * Picks entry points by actual context version, not by which pointers resolve.
+     *
+     * <p>{@code caps.OpenGL33} reported true on a 3.2 context on the development machine, because
+     * it reflects symbol resolution rather than the version the context was created with. The
+     * version integers are the only trustworthy source.</p>
+     */
+    private GpuApi selectGpuApi() {
+        try {
+            var caps = org.lwjgl.opengl.GL.getCapabilities();
+            if (!caps.OpenGL30) {
+                return GpuApi.NONE;
+            }
+            int major = GL11C.glGetInteger(GL30C.GL_MAJOR_VERSION);
+            int minor = GL11C.glGetInteger(GL30C.GL_MINOR_VERSION);
+
+            if (major > 3 || (major == 3 && minor >= 3)) {
+                return GpuApi.CORE_33;
+            }
+            if (caps.GL_ARB_timer_query) {
+                return GpuApi.ARB_TIMER_QUERY;
+            }
+            return GpuApi.NONE;
+        } catch (Throwable ignored) {
+            return GpuApi.NONE;
+        }
+    }
+
+    /**
+     * Proves the counter path works before committing to it.
+     *
+     * <p><b>Why one probe is not enough.</b> On this machine a single {@code glQueryCounter} through
+     * the core symbol was accepted on a 3.2 context, then every counter issued during real
+     * rendering failed with {@code GL_INVALID_OPERATION}. A single call proves the symbol resolves
+     * and nothing more. This issues a burst of counters plus a readback, which is what actually
+     * exercises the path, and checks for errors after every step so a failure is attributed to its
+     * real cause.</p>
+     */
+    private boolean validateCounterPath() {
+        int[] probe = this.queries[0];
         drainGlErrors();
-        GL33C.glQueryCounter(probe, GL33C.GL_TIMESTAMP);
-        int error = GL11C.glGetError();
-        if (error != GL11C.GL_NO_ERROR) {
-            FrameLedgerClient.LOGGER.warn(
-                    "glQueryCounter rejected on a 3.3 context (GL error 0x{}); using CPU timing",
-                    Integer.toHexString(error));
-            return false;
+
+        // A burst: the earlier single-call probe passed and real usage still failed.
+        for (int i = 0; i < Math.min(8, probe.length); i++) {
+            this.counter(probe[i]);
+            int error = GL11C.glGetError();
+            if (error != GL11C.GL_NO_ERROR) {
+                FrameLedgerClient.LOGGER.warn(
+                        "GPU timer rejected via {} on GL {}.{} (GL error 0x{}); using CPU timing",
+                        this.gpuApi,
+                        GL11C.glGetInteger(GL30C.GL_MAJOR_VERSION),
+                        GL11C.glGetInteger(GL30C.GL_MINOR_VERSION),
+                        Integer.toHexString(error));
+                return false;
+            }
+        }
+
+        // Readback: a context can accept counters and still fail to produce results.
+        var buf = this.scratch;
+        for (int i = 0; i < Math.min(8, probe.length); i++) {
+            buf.clear();
+            this.readResult(probe[i], buf);
+            int error = GL11C.glGetError();
+            if (error != GL11C.GL_NO_ERROR) {
+                FrameLedgerClient.LOGGER.warn(
+                        "GPU timer readback rejected via {} (GL error 0x{}); using CPU timing",
+                        this.gpuApi, Integer.toHexString(error));
+                return false;
+            }
         }
         return true;
     }
 
-    /**
-     * A real GL 3.3+ context is required. Nothing weaker is trusted.
-     *
-     * <p>Both weaker checks lied on the development machine: {@code caps.OpenGL33} reflects
-     * whether function pointers resolve rather than the context version, and
-     * {@code GL_ARB_timer_query} plus a resolvable {@code glQueryCounter} was reported true on a
-     * 3.2 context where a single probe succeeded and every subsequent counter failed with
-     * {@code GL_INVALID_OPERATION: Query object not found}.</p>
-     */
-    private boolean hasGl33Context() {
-        try {
-            var caps = org.lwjgl.opengl.GL.getCapabilities();
-            if (!caps.OpenGL30) {
-                return false;
-            }
-            int major = GL11C.glGetInteger(GL30C.GL_MAJOR_VERSION);
-            int minor = GL11C.glGetInteger(GL30C.GL_MINOR_VERSION);
-            return major > 3 || (major == 3 && minor >= 3);
-        } catch (Throwable ignored) {
-            return false;
+    /** Issues one timestamp counter through whichever entry point this context provides. */
+    private void counter(int query) {
+        if (this.gpuApi == GpuApi.CORE_33) {
+            GL33C.glQueryCounter(query, GL33C.GL_TIMESTAMP);
+        } else {
+            ARBTimerQuery.glQueryCounter(query, ARBTimerQuery.GL_TIMESTAMP);
         }
     }
 
@@ -222,6 +287,7 @@ public final class FrameTimer {
         }
         this.frameOpen = false;
         this.writeSlot = (this.writeSlot + 1) % RING;
+        this.superviseGpuPath();
         this.onFrameComplete();
     }
 
@@ -245,9 +311,7 @@ public final class FrameTimer {
             if (segment >= MAX_SEGMENTS) {
                 return;
             }
-            GL33C.glQueryCounter(
-                    this.queries[this.writeSlot][index * INTS_PER_PASS + segment * 2],
-                    GL33C.GL_TIMESTAMP);
+            this.counter(this.queries[this.writeSlot][index * INTS_PER_PASS + segment * 2]);
         } else {
             this.cpuOpenNanos[index] = System.nanoTime();
         }
@@ -265,9 +329,7 @@ public final class FrameTimer {
             if (segment >= MAX_SEGMENTS) {
                 return;
             }
-            GL33C.glQueryCounter(
-                    this.queries[this.writeSlot][index * INTS_PER_PASS + segment * 2 + 1],
-                    GL33C.GL_TIMESTAMP);
+            this.counter(this.queries[this.writeSlot][index * INTS_PER_PASS + segment * 2 + 1]);
             this.segmentsThisFrame[index] = segment + 1;
         } else {
             long start = this.cpuOpenNanos[index];
@@ -306,11 +368,11 @@ public final class FrameTimer {
                 int endQuery = slot[base + segment * 2 + 1];
 
                 buf.clear();
-                GL33C.glGetQueryObjectui64v(startQuery, GL15C.GL_QUERY_RESULT, buf);
+                this.readResult(startQuery, buf);
                 long start = buf.get(0);
 
                 buf.clear();
-                GL33C.glGetQueryObjectui64v(endQuery, GL15C.GL_QUERY_RESULT, buf);
+                this.readResult(endQuery, buf);
                 long end = buf.get(0);
 
                 long delta = end - start;
@@ -321,6 +383,90 @@ public final class FrameTimer {
 
             this.record(index, total);
         }
+
+        // A failed readback is the earliest reliable signal that the driver does not implement
+        // query objects here. Acting on it stops the error flood instead of waiting out probation.
+        if (GL11C.glGetError() != GL11C.GL_NO_ERROR) {
+            this.abandonGpuPath("GPU timer readback failed");
+        }
+    }
+
+    /** Reads a 64-bit query result through whichever entry point this context provides. */
+    private void readResult(int query, java.nio.LongBuffer target) {
+        if (this.gpuApi == GpuApi.CORE_33) {
+            GL33C.glGetQueryObjectui64v(query, GL15C.GL_QUERY_RESULT, target);
+        } else {
+            ARBTimerQuery.glGetQueryObjectui64v(query, GL15C.GL_QUERY_RESULT, target);
+        }
+    }
+
+    // ---------------------------------------------------------------- runtime watchdog
+
+    /**
+     * Frames the GPU path may produce nothing before it is abandoned.
+     *
+     * <p><b>Why a startup probe is not sufficient.</b> On the development machine the ARB counters
+     * validated cleanly — eight counters, a readback, no GL error — and then every counter issued
+     * during real rendering failed with {@code GL_INVALID_OPERATION: Query object not found},
+     * producing 8222 GL errors in one session while the ledger reported 0.00 ms. The probe proved
+     * the entry points resolve; it did not prove the driver implements query objects on a 3.2
+     * context. Only real use does.</p>
+     *
+     * <p>So the GPU path is on probation while it warms up. If it has produced no sample by the
+     * deadline, it is shut down for the session and the CPU backend takes over. Failing over is
+     * silent to the player and, crucially, stops the GL error flood.</p>
+     */
+    private static final int GPU_PROBATION_FRAMES = 90;
+
+    private int gpuFramesWithoutSample;
+
+    /** True once the GPU path has been abandoned for this session. */
+    private boolean gpuAbandoned;
+
+    private void superviseGpuPath() {
+        if (this.source != Source.GPU || this.gpuAbandoned) {
+            return;
+        }
+
+        for (boolean s : this.sampled) {
+            if (s) {
+                this.gpuFramesWithoutSample = 0;
+                return;
+            }
+        }
+
+        if (++this.gpuFramesWithoutSample < GPU_PROBATION_FRAMES) {
+            return;
+        }
+
+        this.abandonGpuPath("GPU timer queries produced no results within "
+                + GPU_PROBATION_FRAMES + " frames");
+    }
+
+    /**
+     * Permanently switches to CPU timing for this session.
+     *
+     * <p>Called either when readback reports a GL error or when probation expires. Both mean the
+     * same thing: this context accepts counters but will not deliver results.</p>
+     */
+    private void abandonGpuPath(String reason) {
+        if (this.gpuAbandoned) {
+            return;
+        }
+        this.gpuAbandoned = true;
+        this.source = Source.CPU;
+        this.gpuFramesWithoutSample = 0;
+
+        // Discard whatever the broken path left behind so the CPU backend starts clean.
+        java.util.Arrays.fill(this.sampled, false);
+        java.util.Arrays.fill(this.smoothedNanos, 0L);
+        java.util.Arrays.fill(this.lastNanos, 0L);
+        java.util.Arrays.fill(this.ewVariance, 0.0);
+        java.util.Arrays.fill(this.varianceSamples, 0);
+
+        FrameLedgerClient.LOGGER.warn(
+                "{}; switched to CPU timing for this session. Values are now main-thread cost, "
+                        + "not GPU time.", reason);
     }
 
     private void harvestCpu() {
