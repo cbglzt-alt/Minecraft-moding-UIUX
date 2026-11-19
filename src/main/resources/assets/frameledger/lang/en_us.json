@@ -3,5 +3,6 @@
   "key.frameledger.expand": "Expand FrameLedger",
   "key.frameledger.sweep": "Measure an option",
   "key.frameledger.culling": "Toggle block entity culling",
+  "key.frameledger.benchmark": "Benchmark culling on/off",
   "category.frameledger": "FrameLedger"
 }

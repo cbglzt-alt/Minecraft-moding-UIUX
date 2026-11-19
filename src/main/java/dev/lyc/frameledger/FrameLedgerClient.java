@@ -1,6 +1,8 @@
 package dev.lyc.frameledger;
 
 import dev.lyc.frameledger.cull.BlockEntityCuller;
+import dev.lyc.frameledger.cull.CullingBenchmark;
+import dev.lyc.frameledger.measure.FrameTimer;
 import dev.lyc.frameledger.measure.SweepController;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -27,6 +29,7 @@ public final class FrameLedgerClient implements ClientModInitializer {
     private static KeyBinding toggleExpanded;
     private static KeyBinding startSweep;
     private static KeyBinding toggleCulling;
+    private static KeyBinding benchmarkCulling;
 
     @Override
     public void onInitializeClient() {
@@ -54,6 +57,12 @@ public final class FrameLedgerClient implements ClientModInitializer {
                 GLFW.GLFW_KEY_F11,
                 "category.frameledger"));
 
+        benchmarkCulling = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.frameledger.benchmark",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_F7,
+                "category.frameledger"));
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (toggleLedger.wasPressed()) {
                 LedgerState.toggle();
@@ -74,9 +83,17 @@ public final class FrameLedgerClient implements ClientModInitializer {
                         ? "Frustum culling on"
                         : "Frustum culling off");
             }
+            while (benchmarkCulling.wasPressed()) {
+                if (CullingBenchmark.isRunning()) {
+                    LedgerState.report("Benchmark already running");
+                } else if (CullingBenchmark.start()) {
+                    LedgerState.report("Measuring culling, hold still...");
+                }
+            }
 
             // Sampling is frame-based, so it has to be driven per tick rather than per key press.
             SweepController.tick();
+            CullingBenchmark.tick(FrameTimer.get());
         });
 
         // Safety net: a sweep must never leave the player's options modified after they leave.

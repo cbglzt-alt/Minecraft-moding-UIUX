@@ -1,5 +1,6 @@
 package dev.lyc.frameledger.gui;
 
+import dev.lyc.frameledger.cull.CullingBenchmark;
 import dev.lyc.frameledger.measure.Pass;
 import dev.lyc.frameledger.measure.SweepController;
 import dev.lyc.frameledger.measure.SweepRun;
@@ -35,8 +36,10 @@ public final class SweepHud {
     public static void render(DrawContext context, int topY) {
         SweepRun run = SweepController.activeRun();
         List<SweepRun.Result> done = SweepController.completed();
+        CullingBenchmark.Run bench = CullingBenchmark.activeRun();
+        CullingBenchmark.Result benchResult = CullingBenchmark.lastResult();
 
-        if (run == null && done.isEmpty()) {
+        if (run == null && done.isEmpty() && bench == null && benchResult == null) {
             return;
         }
 
@@ -48,10 +51,47 @@ public final class SweepHud {
             lines += 2;
         }
         lines += done.size();
+        if (bench != null) {
+            lines += 3;
+        } else if (benchResult != null) {
+            lines += 1;
+        }
         int height = lines * LINE + 6;
 
         context.fill(MARGIN, topY, MARGIN + WIDTH, topY + height, COLOR_BG);
         int y = topY + 4;
+
+        if (bench != null) {
+            String head = String.format("Culling on/off  %d/%d",
+                    bench.pairIndex() + 1, bench.totalPairs());
+            context.drawTextWithShadow(textRenderer, head, MARGIN + 4, y, COLOR_TITLE);
+            y += LINE;
+
+            int filled = (int) Math.round((WIDTH - 8) * (bench.pairIndex() / (double) bench.totalPairs()));
+            context.fill(MARGIN + 4, y + 2, MARGIN + 4 + (WIDTH - 8), y + 5, COLOR_BAR_BG);
+            context.fill(MARGIN + 4, y + 2, MARGIN + 4 + filled, y + 5, COLOR_BAR_FG);
+            y += LINE;
+
+            context.drawTextWithShadow(textRenderer, "hold still, ESC to cancel",
+                    MARGIN + 4, y, COLOR_DIM);
+            y += LINE;
+        } else if (benchResult != null) {
+            String text;
+            int colour;
+            if (!benchResult.measured()) {
+                text = "Culling: not enough samples";
+                colour = COLOR_DIM;
+            } else if (!benchResult.conclusive()) {
+                text = "Culling: no measurable gain here";
+                colour = COLOR_WARN;
+            } else {
+                text = String.format("Culling: %.0f -> %.0f fps (+%.2f ms)",
+                        benchResult.fpsOff(), benchResult.fpsOn(), benchResult.deltaMillis());
+                colour = COLOR_GOOD;
+            }
+            context.drawTextWithShadow(textRenderer, text, MARGIN + 4, y, colour);
+            y += LINE;
+        }
 
         if (run != null) {
             String head = String.format("Measuring  %s  %d/%d",

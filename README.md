@@ -45,9 +45,34 @@ Now "turn down entity distance" is a decision with a number behind it, not a gue
 | **Read at a glance** | Rows sorted by cost, with proportional bars. |
 | **Standalone** | Works with or without Sodium. Sodium is a `recommends`, not a requirement. |
 | **Block-entity culling** | Vanilla only rejects block entities by sphere distance; it never tests the view frustum. This does. `F11` toggles it. |
+| **Culling benchmark** | `F7` runs six alternating on/off blocks and reports whether culling actually saved frame time here — with a confidence interval, and "no measurable gain" when it did not. |
 
 Keys: `F8` ledger · `F9` expand · `F10` measure next option · `F11` block-entity culling ·
-pause menu cancels a sweep.
+`F7` benchmark culling · pause menu cancels a sweep.
+
+The expanded ledger shows `BE cull: ON 15/36 skipped`, `BE cull: ON (none in view)` or
+`BE cull: OFF`, and the current FPS next to the frame total.
+
+### Should you expect culling to raise your FPS?
+
+Sometimes, and the mod will tell you rather than leave you guessing. `F7` measures it because
+toggling `F11` and comparing two FPS readings taken seconds apart cannot answer this: mobs spawn,
+chunks load, the sun moves, the GPU may throttle, and any difference is as likely to be that drift
+as the culling.
+
+A measured example from development, in a world with 36 block entities of which 15 were culled:
+
+```
+Culling benchmark: no measurable difference (7.27 +/- 13.76 ms/frame)
+```
+
+The interval spans zero, so the honest answer there is "no gain". Two reasons that were visible in
+the same session: 36 block entities is too few to matter, and vsync held the frame rate at 60 fps,
+so interval variation came from the frame cap rather than from rendering.
+
+Culling pays off when a scene has many block entities off-screen — a storage room of chests, a hall
+of signs or banners behind you. Turn vsync off before benchmarking, and stand somewhere with a lot
+of them.
 
 ## Why not just use an adaptive-quality mod?
 

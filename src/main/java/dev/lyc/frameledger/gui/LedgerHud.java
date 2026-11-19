@@ -68,12 +68,12 @@ public final class LedgerHud {
         int height = 14 + shown.size() * ROW_HEIGHT + (expanded ? 4 : 12)
                 + (warnUnstable ? 11 : 0) + (showCulling ? 11 : 0);
         context.fill(MARGIN, MARGIN, MARGIN + WIDTH, MARGIN + height, COLOR_BG);
-
         MinecraftClient client = MinecraftClient.getInstance();
         TextRenderer textRenderer = client.textRenderer;
 
         String unit = timer.source() == FrameTimer.Source.GPU ? "GPU" : "CPU";
-        String title = String.format("%s frame  %.1f ms", unit, attributed);
+        int fps = MinecraftClient.getInstance().getCurrentFps();
+        String title = String.format("%s frame  %.1f ms   %d fps", unit, attributed, fps);
         context.drawTextWithShadow(textRenderer, title, MARGIN + 4, MARGIN + 4, COLOR_TITLE);
 
         int rowY = MARGIN + 15;
@@ -83,15 +83,23 @@ public final class LedgerHud {
         }
 
         if (showCulling) {
-            // The culling saving itself is not visible in a pass timer, because a skipped draw
-            // costs nothing to measure. Report the work avoided instead, per frame.
+            // Two distinct states that used to look the same: "off" printed a count that read as
+            // zero skipped, and "on but nothing in view" printed 0/0. State it explicitly.
             long culled = BlockEntityCuller.culledCount();
             long considered = BlockEntityCuller.consideredCount();
-            String text = BlockEntityCuller.isEnabled()
-                    ? String.format("BE cull: %d/%d skipped", culled, considered)
-                    : String.format("BE cull: off (%d seen)", considered);
-            context.drawTextWithShadow(textRenderer, text, MARGIN + 4, rowY + 1,
-                    BlockEntityCuller.isEnabled() ? COLOR_GOOD : COLOR_DIM);
+            String text;
+            int colour;
+            if (!BlockEntityCuller.isEnabled()) {
+                text = "BE cull: OFF";
+                colour = COLOR_DIM;
+            } else if (considered == 0) {
+                text = "BE cull: ON (none in view)";
+                colour = COLOR_DIM;
+            } else {
+                text = String.format("BE cull: ON %d/%d skipped", culled, considered);
+                colour = COLOR_GOOD;
+            }
+            context.drawTextWithShadow(textRenderer, text, MARGIN + 4, rowY + 1, colour);
             rowY += 11;
         }
 

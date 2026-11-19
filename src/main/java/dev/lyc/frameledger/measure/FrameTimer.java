@@ -268,6 +268,18 @@ public final class FrameTimer {
 
     // ---------------------------------------------------------------- frame lifecycle
 
+    /**
+     * Wall-clock interval of the most recent frame, in milliseconds.
+     *
+     * <p>This is the number a player means by "frame time": the gap between consecutive frames,
+     * including whatever the driver and GPU did between them. It is also the only figure that can
+     * show a change when the thing being changed skips work before the timer is ever consulted —
+     * a culled draw produces no span, so pass timings cannot reveal the saving.</p>
+     */
+    private long lastFrameIntervalNanos;
+
+    private long frameStartedNanos;
+
     public void beginFrame() {
         if (!this.isActive()) {
             return;
@@ -275,10 +287,24 @@ public final class FrameTimer {
         if (this.source == Source.GPU) {
             this.harvest();
         }
+        long now = System.nanoTime();
+        if (this.frameStartedNanos != 0L) {
+            long interval = now - this.frameStartedNanos;
+            if (interval > 0L) {
+                this.lastFrameIntervalNanos = interval;
+            }
+        }
+        this.frameStartedNanos = now;
+
         java.util.Arrays.fill(this.segmentsThisFrame, 0);
         java.util.Arrays.fill(this.cpuAccumNanos, 0L);
         java.util.Arrays.fill(this.cpuOpenNanos, 0L);
         this.frameOpen = true;
+    }
+
+    /** Wall-clock interval of the most recent frame in milliseconds, or a negative value if none. */
+    public double frameIntervalMillis() {
+        return this.lastFrameIntervalNanos == 0L ? -1.0 : this.lastFrameIntervalNanos / 1_000_000.0;
     }
 
     public void endFrame() {
@@ -531,10 +557,12 @@ public final class FrameTimer {
                         this.relativeVariability(pass)));
             }
         }
-        FrameLedgerClient.LOGGER.info("Ledger ({}): {}| attributed={}ms unstable={} | BE cull={}/{}",
+        FrameLedgerClient.LOGGER.info("Ledger ({}): {}| attributed={}ms unstable={} | BE cull={}/{} fps={} interval={}ms",
                 this.source, sb, String.format("%.2f", attributed), this.hasUnstablePass(),
                 dev.lyc.frameledger.cull.BlockEntityCuller.culledCount(),
-                dev.lyc.frameledger.cull.BlockEntityCuller.consideredCount());
+                dev.lyc.frameledger.cull.BlockEntityCuller.consideredCount(),
+                net.minecraft.client.MinecraftClient.getInstance().getCurrentFps(),
+                String.format("%.2f", this.frameIntervalMillis()));
     }
 
     public double millis(Pass pass) {
