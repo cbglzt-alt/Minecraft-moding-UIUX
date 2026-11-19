@@ -45,27 +45,48 @@ wrong answer, which is the one failure mode this mod exists to avoid.
   on the live option and restored it, which fired the change callback every time the catalog was
   built — merely opening the menu flipped clouds and particles.
 
-## Phase 3 — block-entity culling on the measurement spine
+## Phase 3 — block-entity culling  ✅ done
 
-**What the decompilation showed.** Sodium 0.6.13 ships a dormant extension point:
+**The gap, measured rather than assumed.** Vanilla already rejects block entities beyond a
+spherical distance — `BlockEntityRenderer.isInRenderDistance` is a plain `isInRange`, 64 blocks by
+default. It never tests the view frustum. A chest twenty blocks behind the player still gets its
+matrix pushed, its position translated, and its renderer dispatched before anything discards it.
 
-- `api.blockentity.BlockEntityRenderPredicate` — public interface (`shouldRender`)
-- `api.blockentity.BlockEntityRenderHandler` — public registration API
-- Sodium itself registers **zero** predicates.
+That is CPU work on the render thread, which is the cost this mod exists to measure, and it is
+wasted on any renderer.
 
-**The important caveat, found by reading the call site.** `ExtendedBlockEntityType.shouldRender`
-is invoked from `ChunkBuilderMeshingTask`, i.e. during **chunk mesh rebuild**, not per frame. So a
-predicate based on camera distance is evaluated whenever a section is rebuilt and then goes stale
-as the player walks away. That makes the predicate API a poor fit for per-frame distance culling.
+**Where it hooks.** `BlockEntityRenderDispatcher.render`, because both the vanilla renderer and
+Sodium funnel every block-entity draw through it — one seam, both paths.
 
-**Therefore** Phase 3 uses the predicate only for *geometry-level* decisions (things that are
-genuinely static per section), and any per-frame block-entity culling goes through an explicit
-`SodiumWorldRenderer.renderBlockEntities` hook instead. Cost thresholds for those decisions come
-from Phase 2's measurements rather than a hardcoded distance.
+Sodium's own `BlockEntityRenderPredicate` was considered and rejected: it is evaluated from
+`ChunkBuilderMeshingTask`, i.e. at section rebuild time, so a frustum or distance test there goes
+stale as the player turns. Per-frame visibility has to be decided per frame.
 
-**Standalone requirement.** FrameLedger does not depend on Sodium. Where a Sodium extension point
-exists it will be used; where it does not, the equivalent behaviour has to come from the mod's own
-mixin against the vanilla renderer. The two paths must share one culling policy, not diverge.
+**Two bugs found by testing it on a live world instead of trusting the build:**
+
+1. **Double-transformed coordinates.** `Frustum.isVisible(Box)` subtracts the camera position
+   internally, having been given it by `setPosition`. The first version also offset the box by the
+   camera, so it moved twice. Result: 42 of 43 block entities culled regardless of where the player
+   looked — a constant 97%, which is not a number that can be right.
+2. **`0/0` was not a bug.** After the fix the counters read zero, which looks like the hook never
+   fires. It does: `BlockEntityRenderDispatcher.render` is only called when there is a block entity
+   to draw. A frame with `0/0` means the view genuinely contained none. A one-shot log now
+   distinguishes the two cases, because the counters alone cannot.
+
+**Verified behaviour after the fix**, sampling while turning on the spot:
+
+| frame sample | culled / considered |
+|---|---|
+| facing the cluster | 0 / 36 |
+| turned away | 34 / 42 |
+| side-on | 15 / 41 |
+| facing again | 1 / 43 |
+
+The rate now tracks the view, which is what a frustum test is supposed to do. `F11` toggles it so
+the effect can be A/B'd, and the ledger shows the per-frame count.
+
+**Deliberate design rule.** `shouldRender` returns "keep" whenever the frustum is unavailable, so
+this optimisation can never remove geometry it could not prove was off-screen.
 
 ## Explicitly out of scope
 

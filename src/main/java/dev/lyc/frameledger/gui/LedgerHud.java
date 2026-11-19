@@ -1,5 +1,6 @@
 package dev.lyc.frameledger.gui;
 
+import dev.lyc.frameledger.cull.BlockEntityCuller;
 import dev.lyc.frameledger.measure.FrameTimer;
 import dev.lyc.frameledger.measure.Pass;
 import net.minecraft.client.MinecraftClient;
@@ -32,6 +33,7 @@ public final class LedgerHud {
     private static final int COLOR_BAR_FG = 0xFF4C9AFF;
     private static final int COLOR_BAR_WARN = 0xFFE0C060;
     private static final int COLOR_WARN = 0xFFE0C060;
+    private static final int COLOR_GOOD = 0xFF6BD46B;
     private static final int COLOR_DIM = 0xFF707070;
 
     private LedgerHud() {
@@ -62,8 +64,9 @@ public final class LedgerHud {
         double attributed = timer.attributedMillis();
 
         boolean warnUnstable = timer.source() == FrameTimer.Source.CPU && timer.hasUnstablePass();
+        boolean showCulling = expanded;
         int height = 14 + shown.size() * ROW_HEIGHT + (expanded ? 4 : 12)
-                + (warnUnstable ? 11 : 0);
+                + (warnUnstable ? 11 : 0) + (showCulling ? 11 : 0);
         context.fill(MARGIN, MARGIN, MARGIN + WIDTH, MARGIN + height, COLOR_BG);
 
         MinecraftClient client = MinecraftClient.getInstance();
@@ -77,6 +80,19 @@ public final class LedgerHud {
         for (Pass pass : shown) {
             drawRow(context, textRenderer, timer, pass, heaviest, attributed, rowY);
             rowY += ROW_HEIGHT;
+        }
+
+        if (showCulling) {
+            // The culling saving itself is not visible in a pass timer, because a skipped draw
+            // costs nothing to measure. Report the work avoided instead, per frame.
+            long culled = BlockEntityCuller.culledCount();
+            long considered = BlockEntityCuller.consideredCount();
+            String text = BlockEntityCuller.isEnabled()
+                    ? String.format("BE cull: %d/%d skipped", culled, considered)
+                    : String.format("BE cull: off (%d seen)", considered);
+            context.drawTextWithShadow(textRenderer, text, MARGIN + 4, rowY + 1,
+                    BlockEntityCuller.isEnabled() ? COLOR_GOOD : COLOR_DIM);
+            rowY += 11;
         }
 
         if (warnUnstable) {

@@ -494,8 +494,8 @@ public final class FrameTimer {
     private static final int WARMUP_FRAMES = 200;
 
     /** After warm-up, log this many times, spaced out, so convergence is visible in the log. */
-    private static final int LOG_COUNT = 3;
-    private static final int LOG_INTERVAL_FRAMES = 400;
+    private static final int LOG_COUNT = 8;
+    private static final int LOG_INTERVAL_FRAMES = 300;
 
     private int frameCounter;
     private int logsWritten;
@@ -531,8 +531,10 @@ public final class FrameTimer {
                         this.relativeVariability(pass)));
             }
         }
-        FrameLedgerClient.LOGGER.info("Ledger ({}): {}| attributed={}ms unstable={}",
-                this.source, sb, String.format("%.2f", attributed), this.hasUnstablePass());
+        FrameLedgerClient.LOGGER.info("Ledger ({}): {}| attributed={}ms unstable={} | BE cull={}/{}",
+                this.source, sb, String.format("%.2f", attributed), this.hasUnstablePass(),
+                dev.lyc.frameledger.cull.BlockEntityCuller.culledCount(),
+                dev.lyc.frameledger.cull.BlockEntityCuller.consideredCount());
     }
 
     public double millis(Pass pass) {

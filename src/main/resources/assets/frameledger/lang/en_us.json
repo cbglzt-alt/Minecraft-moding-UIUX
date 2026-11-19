@@ -2,5 +2,6 @@
   "key.frameledger.toggle": "Toggle FrameLedger",
   "key.frameledger.expand": "Expand FrameLedger",
   "key.frameledger.sweep": "Measure an option",
+  "key.frameledger.culling": "Toggle block entity culling",
   "category.frameledger": "FrameLedger"
 }

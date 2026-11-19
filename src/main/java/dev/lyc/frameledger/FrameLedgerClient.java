@@ -1,5 +1,6 @@
 package dev.lyc.frameledger;
 
+import dev.lyc.frameledger.cull.BlockEntityCuller;
 import dev.lyc.frameledger.measure.SweepController;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -25,6 +26,7 @@ public final class FrameLedgerClient implements ClientModInitializer {
     private static KeyBinding toggleLedger;
     private static KeyBinding toggleExpanded;
     private static KeyBinding startSweep;
+    private static KeyBinding toggleCulling;
 
     @Override
     public void onInitializeClient() {
@@ -46,6 +48,12 @@ public final class FrameLedgerClient implements ClientModInitializer {
                 GLFW.GLFW_KEY_F10,
                 "category.frameledger"));
 
+        toggleCulling = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                "key.frameledger.culling",
+                InputUtil.Type.KEYSYM,
+                GLFW.GLFW_KEY_F11,
+                "category.frameledger"));
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (toggleLedger.wasPressed()) {
                 LedgerState.toggle();
@@ -59,6 +67,12 @@ public final class FrameLedgerClient implements ClientModInitializer {
                             ? "A measurement is already running"
                             : "Nothing left to measure");
                 }
+            }
+            while (toggleCulling.wasPressed()) {
+                BlockEntityCuller.toggle();
+                LedgerState.report(BlockEntityCuller.isEnabled()
+                        ? "Frustum culling on"
+                        : "Frustum culling off");
             }
 
             // Sampling is frame-based, so it has to be driven per tick rather than per key press.

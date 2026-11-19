@@ -44,8 +44,10 @@ Now "turn down entity distance" is a decision with a number behind it, not a gue
 | **Non-invasive** | No renderer rewrite. Only timing calls are added to the hot path. |
 | **Read at a glance** | Rows sorted by cost, with proportional bars. |
 | **Standalone** | Works with or without Sodium. Sodium is a `recommends`, not a requirement. |
+| **Block-entity culling** | Vanilla only rejects block entities by sphere distance; it never tests the view frustum. This does. `F11` toggles it. |
 
-Keys: `F8` ledger · `F9` expand · `F10` measure next option · pause menu cancels a sweep.
+Keys: `F8` ledger · `F9` expand · `F10` measure next option · `F11` block-entity culling ·
+pause menu cancels a sweep.
 
 ## Why not just use an adaptive-quality mod?
 
@@ -189,7 +191,8 @@ That is deliberate: showing nothing beats showing fake zeros, and it must never 
 
 Phase 1 — frame-budget ledger, HUD, controls. Done and verified at the bytecode level.
 Phase 2 — per-option cost attribution with A/B sweeps and confidence intervals. Done.
-Phase 3 — block-entity culling driven by measured cost. Not started; see `ROADMAP.md`.
+Phase 3 — block-entity frustum culling. Done and verified on a live world; the two bugs it
+surfaced are documented in `ROADMAP.md`.
 
 ## License
 
