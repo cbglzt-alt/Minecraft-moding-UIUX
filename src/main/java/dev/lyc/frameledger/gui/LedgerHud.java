@@ -30,6 +30,8 @@ public final class LedgerHud {
     private static final int COLOR_TEXT = 0xFFB0B0B0;
     private static final int COLOR_BAR_BG = 0xFF2A2A2A;
     private static final int COLOR_BAR_FG = 0xFF4C9AFF;
+    private static final int COLOR_BAR_WARN = 0xFFE0C060;
+    private static final int COLOR_WARN = 0xFFE0C060;
     private static final int COLOR_DIM = 0xFF707070;
 
     private LedgerHud() {
@@ -59,7 +61,9 @@ public final class LedgerHud {
         double heaviest = timer.millis(shown.get(0));
         double attributed = timer.attributedMillis();
 
-        int height = 14 + shown.size() * ROW_HEIGHT + (expanded ? 4 : 12);
+        boolean warnUnstable = timer.source() == FrameTimer.Source.CPU && timer.hasUnstablePass();
+        int height = 14 + shown.size() * ROW_HEIGHT + (expanded ? 4 : 12)
+                + (warnUnstable ? 11 : 0);
         context.fill(MARGIN, MARGIN, MARGIN + WIDTH, MARGIN + height, COLOR_BG);
 
         MinecraftClient client = MinecraftClient.getInstance();
@@ -73,6 +77,15 @@ public final class LedgerHud {
         for (Pass pass : shown) {
             drawRow(context, textRenderer, timer, pass, heaviest, attributed, rowY);
             rowY += ROW_HEIGHT;
+        }
+
+        if (warnUnstable) {
+            // CPU timing measures submit time; a driver stall lands on whichever call blocked, so
+            // the split between passes moves while the total does not. Say so instead of
+            // presenting a confident breakdown that would not reproduce.
+            context.drawTextWithShadow(textRenderer, "split unstable, total is reliable",
+                    MARGIN + 4, rowY + 1, COLOR_WARN);
+            rowY += 11;
         }
 
         if (!expanded) {
@@ -98,7 +111,8 @@ public final class LedgerHud {
                 ? (int) Math.round(BAR_WIDTH * (ms / heaviest))
                 : 0;
         filled = Math.max(0, Math.min(BAR_WIDTH, filled));
-        context.fill(barX, barY, barX + filled, barY + BAR_HEIGHT, COLOR_BAR_FG);
+        context.fill(barX, barY, barX + filled, barY + BAR_HEIGHT,
+                timer.isUnstable(pass) ? COLOR_BAR_WARN : COLOR_BAR_FG);
 
         int share = attributed > 0 ? (int) Math.round(ms / attributed * 100.0) : 0;
         context.drawTextWithShadow(textRenderer, share + "%",

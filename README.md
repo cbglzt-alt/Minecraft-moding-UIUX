@@ -40,7 +40,7 @@ Now "turn down entity distance" is a decision with a number behind it, not a gue
 | **Option cost measurement** | `F10` runs an alternating A/B sweep on a vanilla option and reports **how many ms it actually costs on your machine**, with a 95% confidence interval. |
 | **Asynchronous measurement** | GPU path uses `GL_TIMESTAMP` queries in a ring buffer, read 3 frames late, so profiling never stalls the pipeline it measures. |
 | **Nested spans** | `GL_TIME_ELAPSED` cannot nest; timestamps can. Block entities are timed *inside* the world pass without conflict. |
-| **Honest about its source** | If a trustworthy GPU path is unavailable it falls back to CPU submit timing, and the HUD title says `CPU frame` rather than passing CPU numbers off as GPU time. |
+| **Honest about its source** | If a trustworthy GPU path is unavailable it falls back to CPU submit timing, labels it `CPU frame`, and warns when the per-pass split is too unstable to be meaningful. |
 | **Non-invasive** | No renderer rewrite. Only timing calls are added to the hot path. |
 | **Read at a glance** | Rows sorted by cost, with proportional bars. |
 | **Standalone** | Works with or without Sodium. Sodium is a `recommends`, not a requirement. |
@@ -87,6 +87,40 @@ The measurement infrastructure was validated against the real runtime rather tha
   overwrite was checked explicitly, because a silently-dead injector would report a permanent
   `0.0 ms` terrain row and look like it was merely "not sampling".
 - The mod was launched with Sodium absent to confirm it is genuinely standalone.
+- Timing was checked against the vanilla draw order, which caught a real bug (below).
+
+### A bug this found: terrain was absorbing the entity pass
+
+Vanilla `WorldRenderer.render` calls `renderLayer` **eight times, non-contiguously**: solid,
+cutout-mipped and cutout, then the entity and block-entity loops, then translucent, tripwire,
+translucent again, lines and tripwire again.
+
+An earlier version timed a pass as "first start to last end". For terrain that spanned the whole
+world pass, so the terrain row swallowed entities and block entities — it reported 11.0 ms / 79%
+while entities also reported their own time, and the rows overlapped. Passes are now timed as
+**summed segments**, which is what "how much time did this pass take" actually means.
+
+### A limitation this found: the CPU split is not trustworthy
+
+On a GL 3.2 context the mod falls back to CPU submit timing. Six samples from a live session:
+
+| sample | Terrain | Sky | total |
+|---|---|---|---|
+| 2 | 5.43 | 5.31 | 12.15 |
+| 3 | 6.59 | 5.64 | 12.97 |
+| 4 | 4.48 | 4.17 | 10.50 |
+| 5 | 8.36 | 1.77 | 11.93 |
+| 6 | 8.23 | 1.64 | 11.53 |
+
+Terrain and sky move in opposite directions while the total stays flat. This is not noise to be
+filtered out, it is a property of the backend: CPU timing measures **submit** time, and when the
+driver blocks waiting for the GPU, the wait lands on whichever call happened to block. The total
+reflects real waiting; the split between passes does not.
+
+The mod therefore tracks per-pass variability and, on the CPU backend, prints
+`split unstable, total is reliable` and colours those bars differently rather than presenting a
+breakdown that would not reproduce. Per-option A/B sweeps are unaffected: they compare the same
+pass against itself, alternating, so a moving baseline cancels.
 
 ## Build
 

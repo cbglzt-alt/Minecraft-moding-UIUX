@@ -17,15 +17,17 @@ import org.lwjgl.opengl.GL33C;
  *       time. It is labelled "CPU" everywhere so it can never be mistaken for GPU time.</li>
  * </ul>
  *
- * <p><b>Why a CPU fallback exists at all:</b> Minecraft commonly runs a GL 3.2 core context on
- * NVIDIA drivers, where the driver advertises {@code GL_ARB_timer_query} but every counter issued
- * during real rendering fails. Refusing to show anything there would leave the mod inert on a
- * large share of machines. The fallback keeps the attribution feature usable and states plainly
- * that it is CPU-side.</p>
+ * <p><b>Spans are summed, not unioned.</b> A logical pass is often several non-contiguous
+ * segments. Vanilla {@code WorldRenderer.render} draws the first three terrain layers, then runs
+ * the entity loop, then draws the remaining terrain layers. Taking the first start and last end as
+ * a single span therefore swallows the entity pass into the terrain number and reports both:
+ * terrain looked like ~79% of the frame while entities also reported time, so the rows overlapped
+ * and summed past 100%. Every begin/end pair is now its own segment and the frame total is the sum
+ * of that pass's segments, which is what "how much time did this pass take" actually means.</p>
  *
  * <p><b>Why {@code GL_TIMESTAMP} and not {@code GL_TIME_ELAPSED}:</b> elapsed queries cannot nest,
  * and block entities are drawn inside the world pass. Timestamps are absolute, so nesting is free
- * and each span is a subtraction.</p>
+ * and each segment is a subtraction.</p>
  *
  * <p><b>Why a ring:</b> reading a query result blocks until the GPU reaches it. Results are read
  * {@code RING - 1} frames late and only when the driver reports them finished, so measurement never
@@ -46,16 +48,24 @@ public final class FrameTimer {
     private static final int RING = 4;
     private static final int PASS_COUNT = Pass.values().length;
 
+    /**
+     * Segments one pass may record per frame on the GPU path. Terrain needs 8; 32 leaves room for
+     * a busy entity loop. The CPU path has no such limit because it accumulates deltas directly,
+     * so only the GPU fallback can undercount, and only at frame times nobody plays at.
+     */
+    private static final int MAX_SEGMENTS = 32;
+
+    private static final int INTS_PER_PASS = MAX_SEGMENTS * 2;
+
     /** Per-frame EMA weight. One frame is far too noisy to put in front of a player. */
     private static final double ALPHA = 0.15;
 
     private static FrameTimer instance;
 
-    /** {@code queries[slot][pass * 2]} = start, {@code + 1} = end. Unused in CPU mode. */
-    private final int[][] queries = new int[RING][PASS_COUNT * 2];
+    /** {@code queries[slot][pass * INTS_PER_PASS + segment * 2]} = start, {@code + 1} = end. */
+    private final int[][] queries = new int[RING][PASS_COUNT * INTS_PER_PASS];
     private final long[] smoothedNanos = new long[PASS_COUNT];
     private final boolean[] sampled = new boolean[PASS_COUNT];
-    private final boolean[] openedThisFrame = new boolean[PASS_COUNT];
 
     /**
      * Raw, unsmoothed value of the most recent frame. Needed by A/B sweeps: the EMA deliberately
@@ -64,9 +74,14 @@ public final class FrameTimer {
      */
     private final long[] lastNanos = new long[PASS_COUNT];
 
-    /** CPU-mode start timestamps for the current frame. */
-    private final long[] cpuStartNanos = new long[PASS_COUNT];
-    private final long[] cpuEndNanos = new long[PASS_COUNT];
+    // ---------------------------------------------------------------- per-frame working state
+
+    private final int[] segmentsThisFrame = new int[PASS_COUNT];
+
+    /** CPU path: exact running total per pass; no segment cap, so this is never lossy. */
+    private final long[] cpuAccumNanos = new long[PASS_COUNT];
+    /** CPU path: start time of the currently open segment, or 0 when none is open. */
+    private final long[] cpuOpenNanos = new long[PASS_COUNT];
 
     /** Single-element landing buffer for 64-bit query readouts; avoids per-frame allocation. */
     private final java.nio.LongBuffer scratch = org.lwjgl.BufferUtils.createLongBuffer(1);
@@ -195,7 +210,9 @@ public final class FrameTimer {
         if (this.source == Source.GPU) {
             this.harvest();
         }
-        java.util.Arrays.fill(this.openedThisFrame, false);
+        java.util.Arrays.fill(this.segmentsThisFrame, 0);
+        java.util.Arrays.fill(this.cpuAccumNanos, 0L);
+        java.util.Arrays.fill(this.cpuOpenNanos, 0L);
         this.frameOpen = true;
     }
 
@@ -205,48 +222,70 @@ public final class FrameTimer {
         }
         this.frameOpen = false;
         this.writeSlot = (this.writeSlot + 1) % RING;
+        this.onFrameComplete();
     }
 
     // ---------------------------------------------------------------- spans
 
-    /** Opens a span. Repeat calls within one frame are ignored, so multi-call passes stay one span. */
+    /**
+     * Opens a segment of a pass.
+     *
+     * <p>Called once per draw, not once per pass. Every pair is timed separately and summed, so a
+     * pass split into non-contiguous pieces is reported correctly instead of absorbing whatever
+     * ran in the gap.</p>
+     */
     public void beginSpan(Pass pass) {
         if (!this.isActive() || !this.frameOpen) {
             return;
         }
         int index = pass.ordinal();
-        if (this.openedThisFrame[index]) {
-            return;
-        }
-        this.openedThisFrame[index] = true;
 
         if (this.source == Source.GPU) {
-            GL33C.glQueryCounter(this.queries[this.writeSlot][index * 2], GL33C.GL_TIMESTAMP);
+            int segment = this.segmentsThisFrame[index];
+            if (segment >= MAX_SEGMENTS) {
+                return;
+            }
+            GL33C.glQueryCounter(
+                    this.queries[this.writeSlot][index * INTS_PER_PASS + segment * 2],
+                    GL33C.GL_TIMESTAMP);
         } else {
-            this.cpuStartNanos[index] = System.nanoTime();
+            this.cpuOpenNanos[index] = System.nanoTime();
         }
     }
 
-    /** Closes a span. Repeat calls overwrite the end marker, which is what layered passes want. */
+    /** Closes the segment opened by the matching {@link #beginSpan}. */
     public void endSpan(Pass pass) {
         if (!this.isActive() || !this.frameOpen) {
             return;
         }
         int index = pass.ordinal();
-        if (!this.openedThisFrame[index]) {
-            return;
-        }
 
         if (this.source == Source.GPU) {
-            GL33C.glQueryCounter(this.queries[this.writeSlot][index * 2 + 1], GL33C.GL_TIMESTAMP);
+            int segment = this.segmentsThisFrame[index];
+            if (segment >= MAX_SEGMENTS) {
+                return;
+            }
+            GL33C.glQueryCounter(
+                    this.queries[this.writeSlot][index * INTS_PER_PASS + segment * 2 + 1],
+                    GL33C.GL_TIMESTAMP);
+            this.segmentsThisFrame[index] = segment + 1;
         } else {
-            this.cpuEndNanos[index] = System.nanoTime();
+            long start = this.cpuOpenNanos[index];
+            if (start == 0L) {
+                return;
+            }
+            long now = System.nanoTime();
+            if (now > start) {
+                this.cpuAccumNanos[index] += now - start;
+            }
+            this.cpuOpenNanos[index] = 0L;
+            this.segmentsThisFrame[index]++;
         }
     }
 
     // ---------------------------------------------------------------- readout
 
-    /** Reads the oldest slot only if every query completed. Never blocks. */
+    /** Reads the oldest slot only if every query in it completed. Never blocks. */
     private void harvest() {
         int oldest = (this.writeSlot + 1) % RING;
         int[] slot = this.queries[oldest];
@@ -259,43 +298,95 @@ public final class FrameTimer {
 
         var buf = this.scratch;
         for (int index = 0; index < PASS_COUNT; index++) {
-            buf.clear();
-            GL33C.glGetQueryObjectui64v(slot[index * 2], GL15C.GL_QUERY_RESULT, buf);
-            long start = buf.get(0);
+            long total = 0L;
+            int base = index * INTS_PER_PASS;
 
-            buf.clear();
-            GL33C.glGetQueryObjectui64v(slot[index * 2 + 1], GL15C.GL_QUERY_RESULT, buf);
-            long end = buf.get(0);
+            for (int segment = 0; segment < MAX_SEGMENTS; segment++) {
+                int startQuery = slot[base + segment * 2];
+                int endQuery = slot[base + segment * 2 + 1];
 
-            this.record(index, end - start);
+                buf.clear();
+                GL33C.glGetQueryObjectui64v(startQuery, GL15C.GL_QUERY_RESULT, buf);
+                long start = buf.get(0);
+
+                buf.clear();
+                GL33C.glGetQueryObjectui64v(endQuery, GL15C.GL_QUERY_RESULT, buf);
+                long end = buf.get(0);
+
+                long delta = end - start;
+                if (delta > 0L) {
+                    total += delta;
+                }
+            }
+
+            this.record(index, total);
         }
     }
 
     private void harvestCpu() {
         for (int index = 0; index < PASS_COUNT; index++) {
-            if (!this.openedThisFrame[index]) {
-                continue;
-            }
-            long start = this.cpuStartNanos[index];
-            long end = this.cpuEndNanos[index];
-            // A span that opened but never closed leaves end == 0 from a previous frame; the
-            // monotonic clock makes end > start a reliable liveness test.
-            if (end > start) {
-                this.record(index, end - start);
-            }
+            this.record(index, this.cpuAccumNanos[index]);
         }
     }
 
     private void record(int index, long deltaNanos) {
-        // A span that never closed (or never opened) reads as zero or negative and is skipped.
+        // A pass that was never drawn reads as zero and is skipped rather than shown as 0.0 ms.
         if (deltaNanos <= 0) {
             return;
         }
         this.lastNanos[index] = deltaNanos;
+        this.updateVariance(index, deltaNanos);
         this.smoothedNanos[index] = this.sampled[index]
                 ? (long) (this.smoothedNanos[index] * (1.0 - ALPHA) + deltaNanos * ALPHA)
                 : deltaNanos;
         this.sampled[index] = true;
+    }
+
+    // ---------------------------------------------------------------- diagnostics
+
+    /** Frames to ignore after entering a world: shaders compile and textures upload there. */
+    private static final int WARMUP_FRAMES = 200;
+
+    /** After warm-up, log this many times, spaced out, so convergence is visible in the log. */
+    private static final int LOG_COUNT = 3;
+    private static final int LOG_INTERVAL_FRAMES = 400;
+
+    private int frameCounter;
+    private int logsWritten;
+
+    /**
+     * Called once per completed frame with the pass data for that frame.
+     *
+     * <p><b>Why the counter lives here.</b> An earlier version counted inside the per-pass record
+     * callback, so with six instrumented passes the warm-up expired after a sixth of the intended
+     * frames and the log reported a still-warming frame.</p>
+     */
+    private void onFrameComplete() {
+        if (this.logsWritten >= LOG_COUNT) {
+            return;
+        }
+        this.frameCounter++;
+        if (this.frameCounter < WARMUP_FRAMES) {
+            return;
+        }
+        int sinceWarmup = this.frameCounter - WARMUP_FRAMES;
+        if (sinceWarmup % LOG_INTERVAL_FRAMES != 0) {
+            return;
+        }
+        this.logsWritten++;
+
+        StringBuilder sb = new StringBuilder();
+        double attributed = 0.0;
+        for (Pass pass : Pass.values()) {
+            if (this.sampled[pass.ordinal()]) {
+                double ms = this.millis(pass);
+                attributed += ms;
+                sb.append(String.format("%s=%.2f(cv%.2f) ", pass.label(), ms,
+                        this.relativeVariability(pass)));
+            }
+        }
+        FrameLedgerClient.LOGGER.info("Ledger ({}): {}| attributed={}ms unstable={}",
+                this.source, sb, String.format("%.2f", attributed), this.hasUnstablePass());
     }
 
     public double millis(Pass pass) {
@@ -326,12 +417,93 @@ public final class FrameTimer {
         return result;
     }
 
-    /** Sum of every attributed span. Deliberately not "the frame": only instrumented time. */
+    /**
+     * Sum of every attributed span. Deliberately not "the frame": only instrumented time.
+     *
+     * <p>Segments of a pass are disjoint, and passes are drawn in distinct code paths, so this sum
+     * no longer double-counts. It can still be less than the frame because uninstrumented work
+     * (GUI, buffer uploads, chunk building) is excluded.</p>
+     *
+     * <p><b>This total is more trustworthy than the individual rows on the CPU backend.</b> CPU
+     * timing measures submit time, and when the driver blocks waiting for the GPU, the wait lands
+     * on whichever call happened to block. Observed behaviour: terrain and sky trade milliseconds
+     * between samples while their sum stays flat, because the blocking point migrates. The total
+     * still reflects real waiting; the split between passes does not.</p>
+     */
     public double attributedMillis() {
         long total = 0L;
         for (int index = 0; index < PASS_COUNT; index++) {
             total += this.smoothedNanos[index];
         }
         return total / 1_000_000.0;
+    }
+
+    // ---------------------------------------------------------------- stability
+
+    /**
+     * Per-pass relative variability of the raw frame values, as a coefficient of variation.
+     *
+     * <p>Tracked with an exponentially weighted mean and second moment, so it costs two float
+     * operations per sample and reflects recent frames rather than all history.</p>
+     */
+    private final double[] ewVariance = new double[PASS_COUNT];
+    private final int[] varianceSamples = new int[PASS_COUNT];
+
+    private static final double VARIANCE_ALPHA = 0.08;
+
+    /**
+     * Relative standard deviation for a pass, or 0 when there is not enough data.
+     *
+     * <p>Used to stop the UI asserting a breakdown it cannot support. A row whose frame-to-frame
+     * spread is comparable to its own mean is not a measurement of that pass, it is a measurement
+     * of something that moved.</p>
+     */
+    public double relativeVariability(Pass pass) {
+        int index = pass.ordinal();
+        if (this.varianceSamples[index] < 12) {
+            return 0.0;
+        }
+        double mean = this.smoothedNanos[index];
+        if (mean <= 0.0) {
+            return 0.0;
+        }
+        double stdDev = Math.sqrt(Math.max(0.0, this.ewVariance[index]));
+        return stdDev / mean;
+    }
+
+    /**
+     * True when a pass's own spread is too large to attribute time to it confidently.
+     *
+     * <p>The threshold is deliberately generous. On the CPU backend terrain genuinely varies as
+     * the player turns, so flagging normal variation as unreliable would make the indicator
+     * useless noise; it is meant to catch the case where the number is meaningless, not merely
+     * noisy.</p>
+     */
+    public boolean isUnstable(Pass pass) {
+        return this.relativeVariability(pass) > 0.75;
+    }
+
+    /** Whether any pass is currently too unstable to attribute time to. */
+    public boolean hasUnstablePass() {
+        for (Pass pass : Pass.values()) {
+            if (this.sampled[pass.ordinal()] && this.isUnstable(pass)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void updateVariance(int index, long deltaNanos) {
+        double value = deltaNanos;
+        double mean = this.smoothedNanos[index];
+
+        if (this.varianceSamples[index] == 0) {
+            this.ewVariance[index] = 0.0;
+        } else {
+            double deviation = value - mean;
+            this.ewVariance[index] = this.ewVariance[index] * (1.0 - VARIANCE_ALPHA)
+                    + deviation * deviation * VARIANCE_ALPHA;
+        }
+        this.varianceSamples[index]++;
     }
 }
