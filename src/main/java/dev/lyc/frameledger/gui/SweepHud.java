@@ -82,7 +82,10 @@ public final class SweepHud {
                 text = "Culling: not enough samples";
                 colour = COLOR_DIM;
             } else if (!benchResult.conclusive()) {
-                text = "Culling: no measurable gain here";
+                // A conclusion without its reason is useless: "no gain" because the scene has
+                // nothing to cull is a completely different statement from "no gain" because the
+                // culling itself does not help here.
+                text = explainNoGain(benchResult);
                 colour = COLOR_WARN;
             } else {
                 text = String.format("Culling: %.0f -> %.0f fps (+%.2f ms)",
@@ -115,8 +118,7 @@ public final class SweepHud {
     }
 
     private static void drawResult(DrawContext context, TextRenderer textRenderer,
-                                   SweepRun.Result result, int y) {
-        String text;
+                                   SweepRun.Result result, int y) {        String text;
         int colour;
 
         if (!result.isMeasured()) {
@@ -143,5 +145,25 @@ public final class SweepHud {
     /** Human-readable pass name for the sweep target, e.g. "Particles". */
     public static String passLabel(Pass pass) {
         return pass.label();
+    }
+
+    /**
+     * Turns an inconclusive benchmark into a statement about why.
+     *
+     * <p>"No measurable gain" on its own is unhelpful, because the two reasons behind it call for
+     * opposite responses: if nothing was culled the test simply did not exercise the feature and
+     * the player should face away from their block entities; if most of them were culled and the
+     * frame did not improve, then the feature genuinely does not help in that scene and there is
+     * nothing to fix.</p>
+     */
+    private static String explainNoGain(CullingBenchmark.Result result) {
+        if (result.considered() == 0) {
+            return "Culling: no gain (no block entities)";
+        }
+        if (result.culledFraction() < 0.05) {
+            return "Culling: no gain (nothing off-screen)";
+        }
+        return String.format("Culling: no gain (skipped %.0f%%)",
+                result.culledFraction() * 100.0);
     }
 }

@@ -96,6 +96,11 @@ public final class FrameLedgerClient implements ClientModInitializer {
             CullingBenchmark.tick(FrameTimer.get());
         });
 
+        // Clear a stale benchmark result when leaving the world. The number describes a specific
+        // scene, so carrying it into a different world presents a conclusion about somewhere the
+        // player is no longer standing.
+        CullingBenchmark.clearResult();
+
         // Safety net: a sweep must never leave the player's options modified after they leave.
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) ->
                 SweepController.resetForWorldExit());

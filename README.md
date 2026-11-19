@@ -60,15 +60,16 @@ toggling `F11` and comparing two FPS readings taken seconds apart cannot answer 
 chunks load, the sun moves, the GPU may throttle, and any difference is as likely to be that drift
 as the culling.
 
-A measured example from development, in a world with 36 block entities of which 15 were culled:
+When it reports no gain, it says which kind:
 
-```
-Culling benchmark: no measurable difference (7.27 +/- 13.76 ms/frame)
-```
+| message | meaning |
+|---|---|
+| `no gain (no block entities)` | nothing to test here |
+| `no gain (nothing off-screen)` | the test did not exercise culling — face away from your block entities |
+| `no gain (skipped 87%)` | culling did run and genuinely did not help in this scene |
 
-The interval spans zero, so the honest answer there is "no gain". Two reasons that were visible in
-the same session: 36 block entities is too few to matter, and vsync held the frame rate at 60 fps,
-so interval variation came from the frame cap rather than from rendering.
+That distinction matters because the first two mean "test again differently" and the last means
+"nothing to fix".
 
 Culling pays off when a scene has many block entities off-screen — a storage room of chests, a hall
 of signs or banners behind you. Turn vsync off before benchmarking, and stand somewhere with a lot

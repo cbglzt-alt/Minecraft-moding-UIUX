@@ -87,6 +87,12 @@ public final class CullingBenchmark {
         return lastResult;
     }
 
+    /** Discards the last result, e.g. when the scene it described no longer exists. */
+    public static void clearResult() {
+        lastResult = null;
+        cancel();
+    }
+
     private static void logResult(Result result) {
         if (!result.measured()) {
             FrameLedgerClient.LOGGER.info("Culling benchmark: not enough samples");
@@ -125,6 +131,11 @@ public final class CullingBenchmark {
         private double onFrameMillisTotal;
         private int onFrameMillisSamples;
 
+        /** Totals seen during the "on" arm, used to explain an inconclusive result. */
+        private long onCulledTotal;
+        private long onConsideredTotal;
+        private int onStatFrames;
+
         private void beginArm(boolean on) {
             cullingOn = on;
             BlockEntityCuller.setEnabled(on);
@@ -149,6 +160,9 @@ public final class CullingBenchmark {
                     if (cullingOn) {
                         onAccumulator += interval;
                         onCount++;
+                        onCulledTotal += BlockEntityCuller.culledCount();
+                        onConsideredTotal += BlockEntityCuller.consideredCount();
+                        onStatFrames++;
                     } else {
                         offAccumulator += interval;
                         offCount++;
@@ -196,7 +210,7 @@ public final class CullingBenchmark {
             int n = pairDeltas.size();
             if (n < 3) {
                 return new Result(false, Double.NaN, Double.NaN, n,
-                        Double.NaN, Double.NaN, false);
+                        Double.NaN, Double.NaN, false, 0L, 0L, 0.0);
             }
 
             double mean = 0.0;
@@ -230,7 +244,11 @@ public final class CullingBenchmark {
             // on but must not be reported as a saving.
             boolean conclusive = mean - halfWidth > 0.0;
 
-            return new Result(true, mean, halfWidth, n, fps(offMean), fps(onMean), conclusive);
+            double culledFraction = onConsideredTotal > 0
+                    ? (double) onCulledTotal / (double) onConsideredTotal : 0.0;
+
+            return new Result(true, mean, halfWidth, n, fps(offMean), fps(onMean), conclusive,
+                    onConsideredTotal, onCulledTotal, culledFraction);
         }
 
         private static double fps(double frameMillis) {
@@ -239,10 +257,14 @@ public final class CullingBenchmark {
     }
 
     /**
-     * @param deltaMillis mean (off − on) frame interval: milliseconds saved per frame by culling
-     * @param conclusive  whether the 95% interval excludes zero
+     * @param deltaMillis    mean (off − on) frame interval: milliseconds saved per frame by culling
+     * @param conclusive     whether the 95% interval excludes zero
+     * @param considered     block entities the culler was asked about, summed over the "on" arm
+     * @param culled         how many of those it skipped
+     * @param culledFraction culled / considered, used to explain an inconclusive result
      */
     public record Result(boolean measured, double deltaMillis, double halfWidth, int pairs,
-                         double fpsOff, double fpsOn, boolean conclusive) {
+                         double fpsOff, double fpsOn, boolean conclusive,
+                         long considered, long culled, double culledFraction) {
     }
 }

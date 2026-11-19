@@ -502,10 +502,24 @@ public final class FrameTimer {
     }
 
     private void record(int index, long deltaNanos) {
-        // A pass that was never drawn reads as zero and is skipped rather than shown as 0.0 ms.
         if (deltaNanos <= 0) {
+            // The pass was not drawn this frame.
+            //
+            // This used to `return` immediately, which left the last value on screen forever: with
+            // every block entity culled, "Block Entities" kept displaying 27.0 ms while the frame
+            // rate said 580 fps (1.7 ms per frame). Freezing is the worst possible answer here,
+            // because it reports work that is no longer happening and makes a working optimisation
+            // look broken.
+            //
+            // Decay instead. Only passes already measured are decayed, so an instrumented-but-unused
+            // pass stays absent rather than appearing as a permanent 0.0.
+            if (this.sampled[index] && this.smoothedNanos[index] > 0L) {
+                this.smoothedNanos[index] = (long) (this.smoothedNanos[index] * (1.0 - ALPHA));
+            }
+            this.lastNanos[index] = 0L;
             return;
         }
+
         this.lastNanos[index] = deltaNanos;
         this.updateVariance(index, deltaNanos);
         this.smoothedNanos[index] = this.sampled[index]
